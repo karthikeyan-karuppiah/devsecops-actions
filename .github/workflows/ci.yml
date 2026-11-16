@@ -16,7 +16,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
@@ -25,10 +25,10 @@ jobs:
 
       - name: Test validate-push-commit
         if: github.event_name == 'push'
-        uses: ./validate-push-commit
+        uses: $/validate-push-commit
 
       - name: Test lint-containers
-        uses: ./lint-containers
+        uses: $/lint-containers
 
       - name: Test trivy-security
-        uses: ./trivy-security
+        uses: $/trivy-security
