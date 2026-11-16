@@ -96,7 +96,7 @@ jobs:
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@://github.com"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin "$TAG_NAME"
           git tag -f "$MAJOR_TAG" "$TAG_NAME^{}"
           git push origin "$MAJOR_TAG" --force
