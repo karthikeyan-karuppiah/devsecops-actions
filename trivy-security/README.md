@@ -15,14 +15,14 @@ Performs automated filesystem secret detection, container image CVE vulnerabilit
 ### Basic Usage (Blocking Secrets, Non-Blocking Image CVEs)
 ```yaml
 - name: Run Trivy Secret & Container Scans
-  uses: karthikeyan-karuppiah/github-actions/trivy-security@v1
+  uses: karthikeyan-karuppiah/devsecops-actions/trivy-security@v1
 ```
 
 ### Strict Mode with SBOM Artifact Upload
 ```yaml
 - name: Run Trivy Secret & Container Scans
   id: trivy
-  uses: karthikeyan-karuppiah/github-actions/trivy-security@v1
+  uses: karthikeyan-karuppiah/devsecops-actions/trivy-security@v1
   with:
     trivy-version: 'v0.76.1'
     severity: 'CRITICAL,HIGH'

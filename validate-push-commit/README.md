@@ -16,7 +16,7 @@ Enforces the [Conventional Commits](https://conventionalcommits.org) specificati
 ```yaml
 - name: Validate Push Commit Message
   if: github.event_name == 'push'
-  uses: karthikeyan-karuppiah/github-actions/validate-push-commit@v1
+  uses: karthikeyan-karuppiah/devsecops-actions/validate-push-commit@v1
   with:
     allowed-types: 'feat|fix|perf|revert|docs|style|chore|refactor|test|build|ci'
     enforce-lowercase-subject: 'true'

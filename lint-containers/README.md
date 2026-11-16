@@ -16,13 +16,13 @@ A multi-layered static analysis and security posture action for containerized in
 ### Audit Mode (Non-Blocking Compose Security Warnings)
 ```yaml
 - name: Lint YAML, Compose & Dockerfiles
-  uses: karthikeyan-karuppiah/github-actions/lint-containers@v1
+  uses: karthikeyan-karuppiah/devsecops-actions/lint-containers@v1
 ```
 
 ### Strict Enforcement Mode (Fail Build on Security Findings)
 ```yaml
 - name: Lint YAML, Compose & Dockerfiles
-  uses: karthikeyan-karuppiah/github-actions/lint-containers@v1
+  uses: karthikeyan-karuppiah/devsecops-actions/lint-containers@v1
   with:
     enforce-compose-lint: 'true'
     run-yamllint: 'true'
