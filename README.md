@@ -1,8 +1,8 @@
 # Reusable GitHub Actions
 
-[![CI](https://github.com)](https://github.com)
-[![Release](https://shields.io)](https://github.com)
-[![License: MIT](https://shields.io)](LICENSE)
+[![CI](https://github.com/karthikeyan-karuppiah/devsecops-actions/actions/workflows/ci.yml/badge.svg)](https://github.com/karthikeyan-karuppiah/devsecops-actions/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/karthikeyan-karuppiah/devsecops-actions)](https://github.com/karthikeyan-karuppiah/devsecops-actions/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A collection of modular, security-hardened composite GitHub Actions for DevSecOps, container linting, vulnerability scanning, and Conventional Commit enforcement.
 
@@ -95,9 +95,9 @@ karthikeyan-karuppiah / devsecops-actions / trivy-security @ v1
      GitHub Owner         Repo Name        Subfolder      Git Ref (Tag/Branch/SHA)
 ```
 
-* **Floating Major Tags (`@v1`):** Following [GitHub's Action Release Guidelines](https://github.com), every semantic release (`v1.0.0`, `v1.1.0`, etc.) automatically updates the floating `v1` pointer so consumers receive non-breaking improvements without editing workflow files.
+* **Floating Major Tags (`@v1`):** Following [GitHub's Action Release Guidelines](https://docs.github.com/en/actions/how-tos/create-and-publish-actions/release-and-maintain-actions), every semantic release (`v1.0.0`, `v1.1.0`, etc.) automatically updates the floating `v1` pointer so consumers receive non-breaking improvements without editing workflow files.
 * **Exact Release Tags (`@v1.0.0`):** Pin to a full semantic version tag when you want explicit control over upgrades.
-* **Commit SHA Pinning & Lockfiles:** Following [GitHub's Security Hardening Guidelines](https://github.com), production workflows should pin actions to an immutable 40-character commit SHA or manage them via [Workflow Dependency Lockfiles (`gh actions-lock`)](https://github.com):
+* **Commit SHA Pinning & Lockfiles:** Following [GitHub's Security Hardening Guidelines](https://docs.github.com/en/actions/reference/security/secure-use), production workflows should pin actions to an immutable 40-character commit SHA or manage them via [Workflow Dependency Lockfiles (`gh actions-lock`)](https://docs.github.com/en/actions/concepts/security/dependency-lockfiles):
   ```yaml
   uses: karthikeyan-karuppiah/devsecops-actions/trivy-security@<full-40-char-commit-sha> # v1.0.0
   ```
