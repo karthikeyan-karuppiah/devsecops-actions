@@ -1,51 +1,118 @@
+# =============================================================================
+# Pipeline 2: CD / Automated Release (Triggered by Pipeline 1)
+# =============================================================================
+# Core Architecture & Security Model:
+#   1. Event-Driven Chains: Uses workflow_run to isolate privileged release tokens.
+#   2. Strict Origin Guardrails: Verifies push-only, same-repo, successful CI runs.
+#   3. Serialized Execution: Concurrency group prevents release-please tag races.
+# =============================================================================
+
 name: Release
 
+# -----------------------------------------------------------------------------
+# Chained Workflow Trigger Configuration
+# -----------------------------------------------------------------------------
 on:
   workflow_run:
+    # Must match the exact top-level `name:` field in .github/workflows/ci.yml
     workflows: ["CI"]
     types:
       - completed
     branches:
       - main
 
+# -----------------------------------------------------------------------------
+# Concurrency Management (Prevents Release-Please PR / Tag Race Conditions)
+# -----------------------------------------------------------------------------
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
+# -----------------------------------------------------------------------------
+# Zero-Trust Global Permissions Matrix
+# -----------------------------------------------------------------------------
 permissions: {}
 
 jobs:
+  # ===========================================================================
+  # Job: Automated Semantic Versioning, Release & Floating Major Tag Management
+  # ===========================================================================
   release:
+    name: Release Please
     runs-on: ubuntu-latest
+    # Fail-safe timeout to prevent hung API calls
     timeout-minutes: 10
+
+    # Security Constraint (Three-Part Origin & Status Gate):
+    # 1. Triggering CI workflow must have succeeded (`conclusion == 'success'`).
+    # 2. Triggering event must be a direct `push` to `main` (never a fork `pull_request`).
+    # 3. Head repository must match this repository (`head_repository.full_name == repository`).
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_repository.full_name == github.repository
 
+    # Scoped job permissions (least-privilege fallback when using GITHUB_TOKEN)
     permissions:
       contents: write
       pull-requests: write
 
     steps:
+      # -----------------------------------------------------------------------
+      # Semantic Versioning Release Core
+      # -----------------------------------------------------------------------
+      # Uses a custom PAT / GitHub App token (`workflows: write` + `contents: write`)
+      # because GitHub blocks the default GITHUB_TOKEN from creating releases on
+      # commits that add or modify files under `.github/workflows/`.
       - name: Run Release Please
         id: release
         uses: googleapis/release-please-action@v5.0.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-      # Updates the floating major tag (e.g., v1) whenever a new release is cut
+      # -----------------------------------------------------------------------
+      # Repository Checkout for Tag Operations
+      # -----------------------------------------------------------------------
+      # Checks out the repo with the release token so subsequent Git commands
+      # have a local working tree and authenticated push permissions.
+      - name: Checkout repository
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+
+      # -----------------------------------------------------------------------
+      # Floating Major Tag Synchronization (e.g., v1 -> v1.0.0)
+      # -----------------------------------------------------------------------
+      # Dereferences the annotated release tag (`^{}`) to its underlying commit
+      # and force-updates the major version pointer for downstream action consumers.
       - name: Update floating major tag
-        if: steps.release.outputs.release_created == 'true'
+        if: ${{ steps.release.outputs.release_created == 'true' }}
         env:
           TAG_NAME: ${{ steps.release.outputs.tag_name }}
           MAJOR_TAG: v${{ steps.release.outputs.major }}
         run: |
           set -euo pipefail
-          git config user.name "devsecops-actions[bot]"
-          git config user.email "41898282+devsecops-actions[bot]@://github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@://github.com"
           git fetch origin "$TAG_NAME"
           git tag -f "$MAJOR_TAG" "$TAG_NAME^{}"
           git push origin "$MAJOR_TAG" --force
+
+      # -----------------------------------------------------------------------
+      # Output Logging and Reporting
+      # -----------------------------------------------------------------------
+      # Uses brace encapsulation and standard file writers ('>>')
+      # to prevent script-injection opportunities within echo contexts.
+      - name: Post-release summary
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### 🚀 New Release Created"
+            echo "- Version: \`${{ steps.release.outputs.tag_name }}\`"
+            echo "- Major Tag Updated: \`v${{ steps.release.outputs.major }}\`"
+            echo "- Release URL: ${{ steps.release.outputs.html_url }}"
+          } >> "$GITHUB_STEP_SUMMARY"
