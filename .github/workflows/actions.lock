@@ -8,7 +8,6 @@ workflows:
         - 'aquasecurity/setup-trivy@v0.3.1'
         - 'hadolint/hadolint-action@v3.5.0'
         - 'ibiqlik/action-yamllint@v3.1.1'
-        - 'rhysd/actionlint@v1.7.12'
     '.github/workflows/release.yml':
         - 'actions/checkout@v4.4.0'
         - 'googleapis/release-please-action@v5.0.0'
@@ -51,8 +50,3 @@ dependencies:
         commit: 'sha1-2576378a8e339169678f9939646ee3ee325e845c'
         owner_id: 13883414
         repo_id: 215496380
-    'rhysd/actionlint@v1.7.12':
-        ref: 'v1.7.12'
-        commit: 'sha1-914e7df21a07ef503a81201c76d2b11c789d3fca'
-        owner_id: 823277
-        repo_id: 370668507
