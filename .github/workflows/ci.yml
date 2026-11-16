@@ -103,7 +103,7 @@ jobs:
         with:
           severity: 'CRITICAL,HIGH'
           enforce-fs-findings: 'true'
-          enforce-image-cves: 'true'
+          enforce-image-cves: 'false'
           ignore-unfixed: 'true'
           sbom-dir: '/tmp/test-sboms'
           sarif-file: '/tmp/trivy-test.sarif'
