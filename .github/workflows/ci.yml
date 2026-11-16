@@ -61,7 +61,7 @@ jobs:
       - name: Lint workflow and action YAML files
         run: |
           set -euo pipefail
-          go install ://github.com
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           "$(go env GOPATH)/bin/actionlint" -ignore 'specifying action "[$]/'
 
       # -----------------------------------------------------------------------
