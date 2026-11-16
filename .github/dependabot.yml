@@ -1,0 +1,25 @@
+# =============================================================================
+# Dependabot Configuration: Automated GitHub Actions Dependency Updates
+# =============================================================================
+# Automatically scans `.github/workflows/` and root-level composite action
+# directories (`/*/action.yml`) for outdated third-party GitHub Actions and
+# opens grouped pull requests weekly using Conventional Commits prefixes.
+# =============================================================================
+
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directories:
+      - "/"
+      - "/lint-containers"
+      - "/trivy-security"
+      - "/validate-push-commit"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      github-actions:
+        patterns:
+          - "*"

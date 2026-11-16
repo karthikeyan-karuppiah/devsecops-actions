@@ -1,0 +1,159 @@
+# =============================================================================
+# Composite Action: Trivy Secret Detection, Image CVE Scan & SBOM Generation
+# =============================================================================
+# Purpose:
+#   Executes automated vulnerability and supply-chain security assessments using
+#   Aqua Security Trivy across both source files and referenced container images.
+#
+# Pipeline Stages:
+#   1. Trivy CLI Installation & Native Vulnerability DB Caching
+#   2. Blocking Repository Filesystem Secret Scan (API keys, tokens, private keys)
+#   3. Container Image Discovery (from Docker Compose manifests)
+#   4. Container Image CVE Vulnerability Scan + CycloneDX SBOM Generation
+#
+# Supply-Chain Output:
+#   Generates standard CycloneDX JSON SBOMs (`*.cdx.json`) for every scanned
+#   container image inside `sbom-dir`, ready for downstream artifact upload or
+#   attestation workflows.
+# =============================================================================
+
+name: 'Trivy Secret & Image Security Scan'
+description: 'Scans repository filesystem for secrets, audits Compose container images for CVEs, and generates CycloneDX SBOMs'
+
+branding:
+  icon: 'shield'
+  color: 'purple'
+
+# -----------------------------------------------------------------------------
+# Action Interface: Configurable Inputs
+# -----------------------------------------------------------------------------
+inputs:
+  trivy-version:
+    description: 'Pinned Trivy CLI release version to install (e.g., v0.76.1)'
+    required: false
+    default: 'v0.76.1'
+  severity:
+    description: 'Comma-separated vulnerability severities to evaluate (UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL)'
+    required: false
+    default: 'CRITICAL,HIGH'
+  enforce-image-cves:
+    description: 'Fail the workflow if container image CVEs match the severity filter ("true" or "false")'
+    required: false
+    default: 'false'
+  sbom-dir:
+    description: 'Output directory where CycloneDX JSON SBOM files will be written'
+    required: false
+    default: 'trivy-sboms'
+
+# -----------------------------------------------------------------------------
+# Action Interface: Outputs
+# -----------------------------------------------------------------------------
+outputs:
+  sbom-dir:
+    description: 'Directory path containing generated CycloneDX SBOM files'
+    value: ${{ inputs.sbom-dir }}
+
+# -----------------------------------------------------------------------------
+# Execution Engine: Composite Steps
+# -----------------------------------------------------------------------------
+runs:
+  using: 'composite'
+  steps:
+    # -------------------------------------------------------------------------
+    # Stage 1: Toolchain Provisioning & Database Caching
+    # -------------------------------------------------------------------------
+    # `cache: true` leverages aquasecurity/setup-trivy's built-in cache manager
+    # to persist the Trivy vulnerability database across workflow runs.
+    - name: Install Trivy
+      uses: aquasecurity/setup-trivy@v0.2.6
+      with:
+        version: ${{ inputs.trivy-version }}
+        cache: true
+
+    # -------------------------------------------------------------------------
+    # Stage 2: Filesystem Secret Detection (Blocking Gate)
+    # -------------------------------------------------------------------------
+    # Scans working tree files for accidentally committed credentials, tokens,
+    # and private keys. Always enforces `--exit-code 1` on findings.
+    - name: Scan filesystem for leaked secrets
+      shell: bash
+      env:
+        SEVERITY: ${{ inputs.severity }}
+      run: |
+        set -euo pipefail
+        echo "=== Trivy Filesystem Secret Scan ==="
+        trivy fs \
+          --scanners secret \
+          --severity "$SEVERITY" \
+          --exit-code 1 \
+          --format table \
+          --skip-dirs .git \
+          .
+
+    # -------------------------------------------------------------------------
+    # Stage 3: Container Image CVE Assessment & CycloneDX SBOM Generation
+    # -------------------------------------------------------------------------
+    # Parses unique `image:` declarations across all Compose files, evaluates
+    # each image for known CVEs, and exports a CycloneDX SBOM for supply-chain
+    # visibility and compliance tracking.
+    - name: Scan container images and generate SBOMs
+      shell: bash
+      env:
+        SEVERITY: ${{ inputs.severity }}
+        ENFORCE_CVES: ${{ inputs.enforce-image-cves }}
+        SBOM_DIR: ${{ inputs.sbom-dir }}
+      run: |
+        set -euo pipefail
+
+        echo "=== Trivy Image Scan + CycloneDX SBOM Generation ==="
+        mkdir -p "$SBOM_DIR"
+
+        # Discover and deduplicate container image references across Compose files
+        mapfile -t IMAGES < <(
+          find . -type f \( -name "docker-compose.yml" -o -name "compose.yml" -o -name "compose.yaml" \) \
+            -exec grep -hE '^\s+image:\s+' {} + \
+            | sed -E 's/.*image:[[:space:]]*["'\'']?([^"'\'']+)["'\'']?.*/\1/' \
+            | sort -u
+        )
+
+        if [ ${#IMAGES[@]} -eq 0 ]; then
+          echo "⚠ No container images found in Compose files – skipping"
+          exit 0
+        fi
+
+        echo "✅ Found ${#IMAGES[@]} unique image(s):"
+        printf '   - %s\n' "${IMAGES[@]}"
+        echo
+
+        # Determine exit behavior based on caller enforcement policy
+        EXIT_CODE=0
+        if [ "$ENFORCE_CVES" = "true" ]; then
+          EXIT_CODE=1
+        fi
+
+        for img in "${IMAGES[@]}"; do
+          # Skip empty lines or unresolved shell interpolation tokens (e.g., ${IMAGE_TAG})
+          if [[ -z "$img" || "$img" == *'${'* ]]; then
+            echo "→ Skipping unresolved image reference: $img"
+            continue
+          fi
+
+          # Sanitize image name (registry/repo:tag -> registry_repo__tag) for safe filenames
+          safe_name=$(echo "$img" | tr '/:' '__')
+          echo "→ Scanning image: $img"
+
+          # 1. Evaluate image packages and OS layers for known CVEs
+          trivy image \
+            --severity "$SEVERITY" \
+            --exit-code "$EXIT_CODE" \
+            --format table \
+            "$img"
+
+          # 2. Export CycloneDX Software Bill of Materials (SBOM)
+          trivy image \
+            --format cyclonedx \
+            --output "${SBOM_DIR}/${safe_name}.cdx.json" \
+            "$img"
+        done
+
+        echo "✅ Completed image vulnerability scans and SBOM exports in '${SBOM_DIR}/'."

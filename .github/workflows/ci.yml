@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  test-actions:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Lint workflow and action YAML files
+        uses: rhysd/actionlint@v1.7.7
+
+      - name: Test validate-push-commit
+        if: github.event_name == 'push'
+        uses: ./validate-push-commit
+
+      - name: Test lint-containers
+        uses: ./lint-containers
+
+      - name: Test trivy-security
+        uses: ./trivy-security

@@ -1,0 +1,96 @@
+# =============================================================================
+# Composite Action: Push Commit Message Compliance Gate
+# =============================================================================
+# Purpose:
+#   Enforces the Conventional Commits specification (v1.0.0) on direct branch
+#   push events to maintain a clean Git history and guarantee compatibility with
+#   automated semantic release engines (e.g., Release Please).
+#
+# Architectural Notes:
+#   - Scoped strictly to `push` events (`if: github.event_name == 'push'`).
+#     Pull Request title validation should be handled via metadata-only linters
+#     (e.g., amannn/action-semantic-pull-request) so title edits do not trigger
+#     redundant container builds or security scans.
+#   - Evaluates only the first line (subject header) of `head_commit.message`,
+#     safely permitting multi-line commit bodies and footers.
+#   - Automatically bypasses standard Git merge commits and Release Please
+#     automated release commits (`chore(release): ...`).
+# =============================================================================
+
+name: 'Validate Push Commit Message'
+description: 'Enforces Conventional Commits formatting on direct branch push events'
+
+branding:
+  icon: 'check-circle'
+  color: 'green'
+
+# -----------------------------------------------------------------------------
+# Action Interface: Configurable Inputs
+# -----------------------------------------------------------------------------
+inputs:
+  allowed-types:
+    description: 'Pipe-separated list of permitted Conventional Commit prefixes'
+    required: false
+    default: 'feat|fix|perf|revert|docs|style|chore|refactor|test|build|ci'
+  enforce-lowercase-subject:
+    description: 'Require the subject description after ": " to begin with a lowercase letter'
+    required: false
+    default: 'true'
+
+# -----------------------------------------------------------------------------
+# Execution Engine: Composite Steps
+# -----------------------------------------------------------------------------
+runs:
+  using: 'composite'
+  steps:
+    # -------------------------------------------------------------------------
+    # Compliance Gate: Conventional Commit Header Verification
+    # -------------------------------------------------------------------------
+    # Security Note: Untrusted Git commit messages are passed via environment
+    # variables (`env:`) rather than interpolated directly into `run:` to
+    # prevent shell script injection vulnerabilities.
+    - name: Verify Commit Message Format
+      if: github.event_name == 'push'
+      shell: bash
+      env:
+        COMMIT_MSG: ${{ github.event.head_commit.message }}
+        TYPES: ${{ inputs.allowed-types }}
+        LOWERCASE: ${{ inputs.enforce-lowercase-subject }}
+      run: |
+        set -euo pipefail
+        echo "=== Verifying Push Commit Message Compliance ==="
+
+        # Extract the first line (commit header) from multi-line commit messages
+        commit_header=$(echo "$COMMIT_MSG" | head -n 1)
+
+        # Bypass validation for automated merge commits and Release Please bot commits
+        if [[ "$commit_header" =~ ^Merge.* || "$commit_header" =~ ^chore\(release\):.* ]]; then
+          echo "✅ Skipping automated or merge commit strategy context."
+          exit 0
+        fi
+
+        # Construct validation regex based on subject casing enforcement preference
+        if [ "$LOWERCASE" = "true" ]; then
+          conventional_commit_regex="^(${TYPES})(\([a-zA-Z0-9_-]+\))?!?: [^A-Z].+"
+        else
+          conventional_commit_regex="^(${TYPES})(\([a-zA-Z0-9_-]+\))?!?: .+"
+        fi
+
+        # Evaluate commit header against the Conventional Commits pattern
+        if [[ ! "$commit_header" =~ $conventional_commit_regex ]]; then
+          echo -e "\033[1;31m❌ ERROR: Invalid Commit Message Format!\033[0m"
+          echo "Your header: \"$commit_header\""
+          echo ""
+          echo "Commit headers on direct pushes must follow Conventional Commits:"
+          echo "  <type>(<optional scope>): <description>"
+          echo ""
+          echo "Examples:"
+          echo "  feat: add automated backup script"
+          echo "  chore(docker): update container port bindings"
+          echo ""
+          echo "Allowed prefixes: ${TYPES//|/, }"
+          [ "$LOWERCASE" = "true" ] && echo "Note: Description must start with a lowercase letter."
+          exit 1
+        fi
+
+        echo "✅ Commit message matches conventional specification."
