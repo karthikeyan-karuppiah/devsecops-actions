@@ -1,15 +1,13 @@
 # Validate Push Commit Message
 
-Enforces the [Conventional Commits](https://conventionalcommits.org) specification on direct branch `push` events to maintain a clean Git history and guarantee compatibility with automated release tools such as [Release Please](https://github.com).
+Enforces the [Conventional Commits v1.0.0](https://conventionalcommits.org) specification on direct branch `push` events to maintain a clean Git history and guarantee compatibility with automated semantic release engines (such as Release Please).
 
 ## Features
 
-* **Push-Only Execution:** Automatically skips `pull_request` events so PR title validation can be handled independently without triggering full CI runs on title edits.
-* **Header-Only Inspection:** Validates only the first line of `head_commit.message`, allowing multi-line commit bodies and footers.
-* **Smart Bypasses:** Ignores standard Git merge commits (`Merge ...`) and automated Release Please commits (`chore(release): ...`).
-* **Injection Safe:** Reads commit metadata via environment variables (`env:`) rather than direct shell interpolation.
-
----
+* **Zero Git History Required:** Evaluates commit headers directly from the GitHub webhook event payload (`github.event.commits` / `head_commit`), working seamlessly with shallow clones (`fetch-depth: 1`).
+* **Full Push Coverage:** Validates every commit in a multi-commit push by default (`check-all-commits: 'true'`).
+* **Smart Bypass Rules:** Automatically skips Git merge commits (`Merge ...`), Git revert headers (`Revert "..."`), and Release Please release commits (`chore(<branch>): release ...`).
+* **Script-Injection Hardened:** Passes untrusted commit messages strictly via environment variables (`env:`).
 
 ## Usage
 
@@ -20,26 +18,20 @@ Enforces the [Conventional Commits](https://conventionalcommits.org) specificati
   with:
     allowed-types: 'feat|fix|perf|revert|docs|style|chore|refactor|test|build|ci'
     enforce-lowercase-subject: 'true'
+    check-all-commits: 'true'
 ```
-
----
 
 ## Inputs
 
 | Input | Description | Required | Default |
 | :--- | :--- | :---: | :--- |
-| `allowed-types` | Pipe-separated list of permitted Conventional Commit prefixes. | No | `feat\|fix\|perf\|revert\|docs\|style\|chore\|refactor\|test\|build\|ci` |
-| `enforce-lowercase-subject` | Require the description after `: ` to start with a lowercase letter (`"true"` or `"false"`). | No | `'true'` |
+| `allowed-types` | Pipe-separated list of permitted Conventional Commit prefixes. | No | `'feat\|fix\|perf\|revert\|docs\|style\|chore\|refactor\|test\|build\|ci'` |
+| `enforce-lowercase-subject` | Require the subject description after `": "` to begin with a lowercase character (`'true'` or `'false'`). | No | `'true'` |
+| `check-all-commits` | Validate every commit in the push payload instead of only `head_commit` (`'true'` or `'false'`). | No | `'true'` |
 
----
+## Outputs
 
-## Examples
-
-### Valid Commit Headers
-* `feat: add automated backup script`
-* `fix(nginx): resolve reverse proxy timeout`
-* `feat(api)!: drop legacy v1 endpoint`
-
-### Invalid Commit Headers (When `enforce-lowercase-subject: 'true'`)
-* `Updated docker compose` *(missing `<type>:` prefix)*
-* `feat: Add automated backup script` *(subject starts with an uppercase letter)*
+| Output | Description |
+| :--- | :--- |
+| `commit-type` | Parsed Conventional Commit type of the head commit (e.g., `feat`, `fix`, `ci`). |
+| `skipped` | Whether validation was bypassed due to a merge or automated release commit (`'true'` or `'false'`). |

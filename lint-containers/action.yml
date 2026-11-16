@@ -7,8 +7,8 @@
 #
 # Pipeline Stages:
 #   1. YAML Syntax & Formatting Analysis (yamllint)
-#   2. Docker Compose Execution Profile Validation (`docker compose config`)
-#   3. CIS Docker Benchmark & OWASP Compose Security Audit (`compose-lint`)
+#   2. Docker Compose Schema & Structure Validation (`docker compose config --no-interpolate`)
+#   3. CIS Docker Benchmark & OWASP Compose Security Audit (`compose-lint` in isolated venv)
 #   4. Conditional Dockerfile Best-Practice Linting (`hadolint`)
 #
 # Adoption Strategy:
@@ -19,33 +19,41 @@
 # =============================================================================
 
 name: 'Lint Containers & Compose'
-description: 'Runs YAML lint, Docker Compose config validation, compose-lint security checks, and Hadolint'
+description: 'Runs YAML lint, Docker Compose schema validation, compose-lint security checks, and Hadolint'
 
 branding:
   icon: 'layers'
   color: 'blue'
 
 # -----------------------------------------------------------------------------
-# Action Interface: Configurable Inputs
+# Action Interface: Configurable Inputs & Outputs
 # -----------------------------------------------------------------------------
 inputs:
   enforce-compose-lint:
     description: 'Fail the workflow if compose-lint detects security misconfigurations ("true" or "false")'
     required: false
     default: 'false'
+  compose-lint-version:
+    description: 'Pinned compose-lint PyPI package version to install (leave empty for latest)'
+    required: false
+    default: ''
   run-yamllint:
     description: 'Enable repository-wide YAML linting via yamllint ("true" or "false")'
     required: false
     default: 'true'
+  yamllint-config-file:
+    description: 'Optional path to a custom .yamllint configuration file (uses built-in defaults if empty)'
+    required: false
+    default: ''
   hadolint-threshold:
     description: 'Minimum severity threshold to fail Hadolint (error, warning, info, style, ignore)'
     required: false
     default: 'warning'
 
-# -----------------------------------------------------------------------------
-# Action Interface: Outputs
-# -----------------------------------------------------------------------------
 outputs:
+  compose-files-found:
+    description: 'Indicates whether any Docker Compose files were detected and linted ("true" or "false")'
+    value: ${{ steps.compose-lint.outputs.found }}
   dockerfiles-found:
     description: 'Indicates whether any Dockerfiles were detected and linted ("true" or "false")'
     value: ${{ steps.dockerfiles.outputs.found }}
@@ -59,10 +67,8 @@ runs:
     # -------------------------------------------------------------------------
     # Stage 1: YAML Syntax & Formatting Analysis
     # -------------------------------------------------------------------------
-    # Validates structural YAML integrity across workflows and service configs.
-    # Line-length and document-start rules are relaxed for practical IaC readability.
-    - name: Lint YAML files
-      if: inputs.run-yamllint == 'true'
+    - name: Lint YAML files (built-in defaults)
+      if: inputs.run-yamllint == 'true' && inputs.yamllint-config-file == ''
       uses: ibiqlik/action-yamllint@v3.1.1
       with:
         config_data: |
@@ -71,55 +77,80 @@ runs:
             line-length: disable
             document-start: disable
 
+    - name: Lint YAML files (custom config)
+      if: inputs.run-yamllint == 'true' && inputs.yamllint-config-file != ''
+      uses: ibiqlik/action-yamllint@v3.1.1
+      with:
+        config_file: ${{ inputs.yamllint-config-file }}
+
     # -------------------------------------------------------------------------
-    # Stage 2: Docker Compose Schema & Interpolation Verification
+    # Stage 2: Docker Compose Schema & Structure Verification
     # -------------------------------------------------------------------------
-    # Uses Shell Process Substitution (`< <(...)`) instead of basic piping.
-    # Standard pipes execute loops inside isolated subshells, which can mask
-    # non-zero exit codes even when `set -euo pipefail` is active.
+    # Uses `--no-interpolate` so missing runtime `.env` secrets do not cause
+    # false-positive validation failures during static CI checks.
     - name: Validate Docker Compose syntax
       shell: bash
       run: |
         set -euo pipefail
-        IFS=$'\n'
-        while read -r file; do
-          if [[ -f "$file" ]]; then
-            echo "→ Validating execution profile: $file"
-            docker compose -f "$file" config --quiet
-          fi
-        done < <(find . -type f \( -name "docker-compose.yml" -o -name "compose.yml" -o -name "compose.yaml" \))
+        mapfile -t COMPOSE_FILES < <(
+          find . -not -path '*/.git/*' -type f \( \
+            -name "docker-compose.yml" -o \
+            -name "docker-compose.yaml" -o \
+            -name "compose.yml" -o \
+            -name "compose.yaml" \
+          \) | sort
+        )
+
+        for file in "${COMPOSE_FILES[@]}"; do
+          echo "→ Validating schema & structure: $file"
+          docker compose -f "$file" config --no-interpolate --quiet
+        done
 
     # -------------------------------------------------------------------------
     # Stage 3: Docker Compose Security Posture Audit (compose-lint)
     # -------------------------------------------------------------------------
-    # Audits Compose definitions against OWASP & CIS Docker Benchmark controls
-    # (e.g., privileged mode, Docker socket mounts, missing capability drops,
-    # host network bindings, hardcoded secrets, and missing resource limits).
+    # Installs compose-lint inside an isolated virtual environment to comply
+    # with PEP 668 on modern Ubuntu runners without polluting global packages.
     - name: Scan Docker Compose for security misconfigurations
+      id: compose-lint
       shell: bash
       env:
         ENFORCE: ${{ inputs.enforce-compose-lint }}
+        LINT_VERSION: ${{ inputs.compose-lint-version }}
       run: |
         set -euo pipefail
 
-        echo "=== Installing compose-lint ==="
-        pip install --quiet compose-lint
-
-        echo
-        echo "=== Scanning Docker Compose files ==="
-        mapfile -t COMPOSE_FILES < <(find . -type f \( -name "docker-compose.yml" -o -name "compose.yml" -o -name "compose.yaml" \) | sort)
+        mapfile -t COMPOSE_FILES < <(
+          find . -not -path '*/.git/*' -type f \( \
+            -name "docker-compose.yml" -o \
+            -name "docker-compose.yaml" -o \
+            -name "compose.yml" -o \
+            -name "compose.yaml" \
+          \) | sort
+        )
 
         if [ ${#COMPOSE_FILES[@]} -eq 0 ]; then
           echo "⚠ No Docker Compose files found – skipping"
+          echo "found=false" >> "$GITHUB_OUTPUT"
           exit 0
         fi
 
-        echo "✅ Found ${#COMPOSE_FILES[@]} Compose file(s)"
+        echo "found=true" >> "$GITHUB_OUTPUT"
+        echo "=== Installing compose-lint in isolated venv ==="
+        python3 -m venv /tmp/compose-lint-venv
+        if [ -n "$LINT_VERSION" ]; then
+          /tmp/compose-lint-venv/bin/pip install --quiet "compose-lint==${LINT_VERSION}"
+        else
+          /tmp/compose-lint-venv/bin/pip install --quiet compose-lint
+        fi
+
+        echo
+        echo "=== Scanning ${#COMPOSE_FILES[@]} Docker Compose file(s) ==="
         FAILED=0
 
         for file in "${COMPOSE_FILES[@]}"; do
           echo "→ Scanning $file"
-          if ! compose-lint "$file"; then
+          if ! /tmp/compose-lint-venv/bin/compose-lint "$file"; then
             FAILED=1
           fi
           echo
@@ -140,14 +171,12 @@ runs:
     # -------------------------------------------------------------------------
     # Stage 4: Conditional Dockerfile Best-Practice Linting (Hadolint)
     # -------------------------------------------------------------------------
-    # Evaluates repository layout first so repositories relying purely on
-    # pre-built upstream images skip Hadolint cleanly without errors.
     - name: Check for Dockerfiles
       id: dockerfiles
       shell: bash
       run: |
         set -euo pipefail
-        if find . -type f \( -name "Dockerfile" -o -name "*.dockerfile" -o -name "Dockerfile.*" \) | grep -q .; then
+        if find . -not -path '*/.git/*' -type f \( -name "Dockerfile" -o -name "*.dockerfile" -o -name "Dockerfile.*" \) | grep -q .; then
           echo "found=true" >> "$GITHUB_OUTPUT"
         else
           echo "found=false" >> "$GITHUB_OUTPUT"

@@ -11,10 +11,11 @@
 #     Pull Request title validation should be handled via metadata-only linters
 #     (e.g., amannn/action-semantic-pull-request) so title edits do not trigger
 #     redundant container builds or security scans.
-#   - Evaluates only the first line (subject header) of `head_commit.message`,
-#     safely permitting multi-line commit bodies and footers.
-#   - Automatically bypasses standard Git merge commits and Release Please
-#     automated release commits (`chore(release): ...`).
+#   - Evaluates commit headers directly from the GitHub webhook event payload
+#     (`github.event.commits` / `head_commit`), requiring zero Git history
+#     (`fetch-depth: 1` compatible).
+#   - Automatically bypasses Git merge commits, Git revert subjects, and Release
+#     Please automated release commits (`chore(<branch>): release ...`).
 # =============================================================================
 
 name: 'Validate Push Commit Message'
@@ -25,7 +26,7 @@ branding:
   color: 'green'
 
 # -----------------------------------------------------------------------------
-# Action Interface: Configurable Inputs
+# Action Interface: Configurable Inputs & Outputs
 # -----------------------------------------------------------------------------
 inputs:
   allowed-types:
@@ -33,9 +34,21 @@ inputs:
     required: false
     default: 'feat|fix|perf|revert|docs|style|chore|refactor|test|build|ci'
   enforce-lowercase-subject:
-    description: 'Require the subject description after ": " to begin with a lowercase letter'
+    description: 'Require the subject description after ": " to begin with a lowercase character'
     required: false
     default: 'true'
+  check-all-commits:
+    description: 'Validate every commit in the push payload instead of only head_commit'
+    required: false
+    default: 'true'
+
+outputs:
+  commit-type:
+    description: 'Parsed Conventional Commit type of the head commit (e.g., feat, fix, ci)'
+    value: ${{ steps.verify.outputs.commit-type }}
+  skipped:
+    description: 'Whether validation was bypassed due to a merge or automated release commit'
+    value: ${{ steps.verify.outputs.skipped }}
 
 # -----------------------------------------------------------------------------
 # Execution Engine: Composite Steps
@@ -46,51 +59,91 @@ runs:
     # -------------------------------------------------------------------------
     # Compliance Gate: Conventional Commit Header Verification
     # -------------------------------------------------------------------------
-    # Security Note: Untrusted Git commit messages are passed via environment
+    # Security Note: Untrusted Git commit payloads are passed via environment
     # variables (`env:`) rather than interpolated directly into `run:` to
     # prevent shell script injection vulnerabilities.
     - name: Verify Commit Message Format
+      id: verify
       if: github.event_name == 'push'
       shell: bash
       env:
-        COMMIT_MSG: ${{ github.event.head_commit.message }}
+        HEAD_COMMIT_MSG: ${{ github.event.head_commit.message }}
+        COMMITS_JSON: ${{ toJson(github.event.commits) }}
         TYPES: ${{ inputs.allowed-types }}
         LOWERCASE: ${{ inputs.enforce-lowercase-subject }}
+        CHECK_ALL: ${{ inputs.check-all-commits }}
       run: |
         set -euo pipefail
         echo "=== Verifying Push Commit Message Compliance ==="
 
-        # Extract the first line (commit header) from multi-line commit messages
-        commit_header=$(echo "$COMMIT_MSG" | head -n 1)
-
-        # Bypass validation for automated merge commits and Release Please bot commits
-        if [[ "$commit_header" =~ ^Merge.* || "$commit_header" =~ ^chore\(release\):.* ]]; then
-          echo "✅ Skipping automated or merge commit strategy context."
-          exit 0
-        fi
-
         # Construct validation regex based on subject casing enforcement preference
         if [ "$LOWERCASE" = "true" ]; then
-          conventional_commit_regex="^(${TYPES})(\([a-zA-Z0-9_-]+\))?!?: [^A-Z].+"
+          conventional_commit_regex="^(${TYPES})(\([a-zA-Z0-9_./-]+\))?!?: [^[:space:]A-Z].+"
         else
-          conventional_commit_regex="^(${TYPES})(\([a-zA-Z0-9_-]+\))?!?: .+"
+          conventional_commit_regex="^(${TYPES})(\([a-zA-Z0-9_./-]+\))?!?: [^[:space:]].+"
         fi
 
-        # Evaluate commit header against the Conventional Commits pattern
-        if [[ ! "$commit_header" =~ $conventional_commit_regex ]]; then
-          echo -e "\033[1;31m❌ ERROR: Invalid Commit Message Format!\033[0m"
-          echo "Your header: \"$commit_header\""
-          echo ""
-          echo "Commit headers on direct pushes must follow Conventional Commits:"
-          echo "  <type>(<optional scope>): <description>"
-          echo ""
-          echo "Examples:"
-          echo "  feat: add automated backup script"
-          echo "  chore(docker): update container port bindings"
-          echo ""
-          echo "Allowed prefixes: ${TYPES//|/, }"
-          [ "$LOWERCASE" = "true" ] && echo "Note: Description must start with a lowercase letter."
+        validate_header() {
+          local header="$1"
+
+          # Bypass validation for merge commits, standard Git reverts, and Release Please commits
+          if [[ "$header" =~ ^Merge[[:space:]] || "$header" =~ ^Revert[[:space:]]\" || "$header" =~ ^chore\([a-zA-Z0-9_.-]+\):[[:space:]]release[[:space:]] ]]; then
+            echo "⏭️  Skipping automated/merge commit: \"$header\""
+            return 2
+          fi
+
+          if [[ ! "$header" =~ $conventional_commit_regex ]]; then
+            echo -e "\033[1;31m❌ ERROR: Invalid Commit Message Format!\033[0m"
+            echo "Invalid header: \"$header\""
+            echo ""
+            echo "Commit headers on direct pushes must follow Conventional Commits:"
+            echo "  <type>(<optional scope>): <description>"
+            echo ""
+            echo "Examples:"
+            echo "  feat: add automated backup script"
+            echo "  chore(docker): update container port bindings"
+            echo ""
+            echo "Allowed prefixes: ${TYPES//|/, }"
+            [ "$LOWERCASE" = "true" ] && echo "Note: Description must start with a lowercase character."
+            return 1
+          fi
+
+          echo "✅ Validated: \"$header\""
+          return 0
+        }
+
+        # Validate all commits in the push payload (if enabled and present), else head_commit
+        if [ "$CHECK_ALL" = "true" ] && [ -n "$COMMITS_JSON" ] && [ "$COMMITS_JSON" != "null" ] && [ "$COMMITS_JSON" != "[]" ]; then
+          while IFS= read -r msg; do
+            header=$(printf '%s\n' "$msg" | head -n 1)
+            set +e
+            validate_header "$header"
+            rc=$?
+            set -e
+            if [ "$rc" -eq 1 ]; then
+              exit 1
+            fi
+          done < <(printf '%s' "$COMMITS_JSON" | jq -r '.[].message')
+        fi
+
+        # Parse head_commit metadata for step outputs
+        head_header=$(printf '%s\n' "$HEAD_COMMIT_MSG" | head -n 1)
+        set +e
+        validate_header "$head_header"
+        head_rc=$?
+        set -e
+
+        if [ "$head_rc" -eq 1 ]; then
           exit 1
+        elif [ "$head_rc" -eq 2 ]; then
+          {
+            echo "commit-type=chore"
+            echo "skipped=true"
+          } >> "$GITHUB_OUTPUT"
+        else
+          parsed_type="${head_header%%[:(!]*}"
+          {
+            echo "commit-type=${parsed_type}"
+            echo "skipped=false"
+          } >> "$GITHUB_OUTPUT"
         fi
-
-        echo "✅ Commit message matches conventional specification."

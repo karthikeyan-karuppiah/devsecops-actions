@@ -1,5 +1,5 @@
 # =============================================================================
-# Pipeline 1: Continuous Integration / Action Validation & Linting
+# Pipeline 1: Continuous Integration / Action Validation & Integration Tests
 # =============================================================================
 # Core Architecture & Security Model:
 #   1. Zero-Trust Permissions: Top-level permissions locked down; least-privilege
@@ -8,6 +8,8 @@
 #      prevent unintended token leakage across composite action steps.
 #   3. Lockfile & Static Validation: Enforces `actions.lock` pins and lints
 #      workflows via actionlint before executing local `$/` composite actions.
+#   4. End-to-End Integration Testing: Executes every composite action against
+#      hardened fixtures in `tests/fixtures/` and asserts expected outputs.
 # =============================================================================
 
 name: CI
@@ -28,7 +30,7 @@ permissions: {}
 
 jobs:
   # ===========================================================================
-  # Job: Lint Workflows and Execute Local Composite Action Smoke Tests
+  # Job: Lint Workflows and Execute Local Composite Action Integration Tests
   # ===========================================================================
   test-actions:
     name: Test Composite Actions
@@ -59,21 +61,56 @@ jobs:
       - name: Lint workflow and action YAML files
         run: |
           set -euo pipefail
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          go install ://github.com
           "$(go env GOPATH)/bin/actionlint" -ignore 'specifying action "[$]/'
 
       # -----------------------------------------------------------------------
-      # Local Composite Action Integration Tests
+      # Integration Test 1: Conventional Commit Gate
       # -----------------------------------------------------------------------
       # Validates commit conventions on direct pushes to `main` (skipped on PRs)
       - name: Test validate-push-commit
+        id: test-commit
         if: github.event_name == 'push'
         uses: $/validate-push-commit
 
-      # Validates Dockerfile / container linting rules against repository fixtures
+      # -----------------------------------------------------------------------
+      # Integration Test 2: Container, Compose & YAML Linting
+      # -----------------------------------------------------------------------
+      # Lints repository YAML files plus `tests/fixtures/compose.yaml` and
+      # `tests/fixtures/Dockerfile` with strict enforcement enabled.
       - name: Test lint-containers
+        id: test-lint
         uses: $/lint-containers
+        with:
+          enforce-compose-lint: 'true'
+          hadolint-threshold: 'warning'
 
-      # Validates Trivy vulnerability and misconfiguration scanning execution
+      - name: Verify lint-containers outputs
+        run: |
+          set -euo pipefail
+          test "${{ steps.test-lint.outputs.compose-files-found }}" = "true"
+          test "${{ steps.test-lint.outputs.dockerfiles-found }}" = "true"
+          echo "✅ Verified compose-files-found=true and dockerfiles-found=true"
+
+      # -----------------------------------------------------------------------
+      # Integration Test 3: Trivy Security Scan, SBOM & SARIF Generation
+      # -----------------------------------------------------------------------
+      # Scans repository filesystem and `tests/fixtures/compose.yaml` images,
+      # verifying both CycloneDX SBOM and SARIF outputs are generated.
       - name: Test trivy-security
+        id: test-trivy
         uses: $/trivy-security
+        with:
+          severity: 'CRITICAL,HIGH'
+          enforce-fs-findings: 'true'
+          enforce-image-cves: 'true'
+          ignore-unfixed: 'true'
+          sbom-dir: '/tmp/test-sboms'
+          sarif-file: '/tmp/trivy-test.sarif'
+
+      - name: Verify trivy-security outputs
+        run: |
+          set -euo pipefail
+          test -f "/tmp/test-sboms/alpine_3.21.3.cdx.json"
+          test -f "/tmp/trivy-test.sarif"
+          echo "✅ Verified CycloneDX SBOM and SARIF outputs exist"
