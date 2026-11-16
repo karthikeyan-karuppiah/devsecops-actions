@@ -60,7 +60,7 @@ jobs:
         run: |
           set -euo pipefail
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-          actionlint -ignore 'specifying action "[$]/'
+          "$(go env GOPATH)/bin/actionlint" -ignore 'specifying action "[$]/'
 
       # -----------------------------------------------------------------------
       # Local Composite Action Integration Tests
