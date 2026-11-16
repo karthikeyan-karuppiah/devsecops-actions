@@ -155,7 +155,7 @@ runs:
 
     - name: Lint Dockerfiles with Hadolint
       if: steps.dockerfiles.outputs.found == 'true'
-      uses: hadolint/hadolint-action@v3.1.0
+      uses: hadolint/hadolint-action@v3.5.0
       with:
         failure-threshold: ${{ inputs.hadolint-threshold }}
         recursive: true
