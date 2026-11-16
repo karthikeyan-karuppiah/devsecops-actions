@@ -10,6 +10,7 @@ workflows:
         - 'ibiqlik/action-yamllint@v3.1.1'
         - 'rhysd/actionlint@v1.7.12'
     '.github/workflows/release.yml':
+        - 'actions/checkout@v4.4.0'
         - 'googleapis/release-please-action@v5.0.0'
 dependencies:
     'actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb':
@@ -20,6 +21,11 @@ dependencies:
     'actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8':
         ref: 'v6.0.1'
         commit: 'sha1-8e8c483db84b4bee98b60c0593521ed34d9990e8'
+        owner_id: 44036562
+        repo_id: 197814629
+    'actions/checkout@v4.4.0':
+        ref: 'v4.4.0'
+        commit: 'sha1-11d5960a326750d5838078e36cf38b85af677262'
         owner_id: 44036562
         repo_id: 197814629
     'actions/checkout@v7.0.1':
