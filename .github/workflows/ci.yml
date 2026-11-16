@@ -1,34 +1,76 @@
+# =============================================================================
+# Pipeline 1: Continuous Integration / Action Validation & Linting
+# =============================================================================
+# Core Architecture & Security Model:
+#   1. Zero-Trust Permissions: Top-level permissions locked down; least-privilege
+#      `contents: read` granted strictly at the job level.
+#   2. Credential Hygiene: Disables persisted Git credentials on checkout to
+#      prevent unintended token leakage across composite action steps.
+#   3. Local Self-Testing: Validates workflow syntax via actionlint and executes
+#      each local composite action directly from the checked-out workspace.
+# =============================================================================
+
 name: CI
 
+# -----------------------------------------------------------------------------
+# Workflow Trigger Configuration
+# -----------------------------------------------------------------------------
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
 
+# -----------------------------------------------------------------------------
+# Zero-Trust Global Permissions Matrix
+# -----------------------------------------------------------------------------
 permissions: {}
 
 jobs:
+  # ===========================================================================
+  # Job: Lint Workflows and Execute Local Composite Action Smoke Tests
+  # ===========================================================================
   test-actions:
+    name: Test Composite Actions
     runs-on: ubuntu-latest
+    # Fail-safe timeout to prevent hung container builds or security scans
+    timeout-minutes: 15
+
+    # Least-privilege repository read access required for checkout and local actions
     permissions:
       contents: read
 
     steps:
+      # -----------------------------------------------------------------------
+      # Workspace Checkout
+      # -----------------------------------------------------------------------
+      # Checks out the repository so `actionlint` and local `./` composite
+      # actions can run against the current commit without persisted credentials.
       - name: Checkout repository
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v4
         with:
           persist-credentials: false
 
+      # -----------------------------------------------------------------------
+      # Static Workflow & Action Syntax Validation
+      # -----------------------------------------------------------------------
+      # Lints all `.github/workflows/*.yml` and `action.yml` files for syntax,
+      # expression type safety, and action reference formatting.
       - name: Lint workflow and action YAML files
         uses: rhysd/actionlint@v1.7.12
 
+      # -----------------------------------------------------------------------
+      # Local Composite Action Integration Tests
+      # -----------------------------------------------------------------------
+      # Validates commit conventions on direct pushes to `main` (skipped on PRs)
       - name: Test validate-push-commit
         if: github.event_name == 'push'
-        uses: $/validate-push-commit
+        uses: ./validate-push-commit
 
+      # Validates Dockerfile / container linting rules against repository fixtures
       - name: Test lint-containers
-        uses: $/lint-containers
+        uses: ./lint-containers
 
+      # Validates Trivy vulnerability and misconfiguration scanning execution
       - name: Test trivy-security
-        uses: $/trivy-security
+        uses: ./trivy-security
