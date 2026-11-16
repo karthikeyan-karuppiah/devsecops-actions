@@ -47,7 +47,7 @@ jobs:
       # Checks out the repository so `actionlint` and local `./` composite
       # actions can run against the current commit without persisted credentials.
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.4.0
         with:
           persist-credentials: false
 
@@ -65,12 +65,12 @@ jobs:
       # Validates commit conventions on direct pushes to `main` (skipped on PRs)
       - name: Test validate-push-commit
         if: github.event_name == 'push'
-        uses: ./validate-push-commit
+        uses: $/validate-push-commit
 
       # Validates Dockerfile / container linting rules against repository fixtures
       - name: Test lint-containers
-        uses: ./lint-containers
+        uses: $/lint-containers
 
       # Validates Trivy vulnerability and misconfiguration scanning execution
       - name: Test trivy-security
-        uses: ./trivy-security
+        uses: $/trivy-security
