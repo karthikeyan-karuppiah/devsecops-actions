@@ -9,17 +9,18 @@
 #   2. `nektos/act` (via `gh act`) does not yet support the `$/` syntax and fails
 #      with: "Expected format {org}/{repo}[/path]@ref". It only accepts `./` for
 #      local actions.
-#   3. `nektos/act` sends an empty `push` webhook payload by default, leaving
-#      `github.event.head_commit.message` blank unless supplied via `-e`, which
-#      causes Conventional Commit gate actions (`validate-push-commit`) to fail.
+#   3. `nektos/act` sends an empty webhook payload by default, leaving fields like
+#      `github.event.head_commit.message` or `github.event.workflow_run` blank
+#      unless supplied via `-e`, causing commit gates and origin checks to fail.
 #   4. Editing `.github/workflows/` directly in the repo risks accidentally
 #      committing `./` changes or dirtying `git status`.
 #
 # HOW IT WORKS:
 #   Moves to the repository root, copies `.github/workflows/` into an isolated
 #   temp directory, translates `$/` to `./` in the copies, generates a simulated
-#   `push` event JSON payload from your real `HEAD` commit message, runs
-#   `gh act -W` against that temp folder, and deletes all temp files on exit.
+#   event JSON payload matching the requested GitHub event (`push` or
+#   `workflow_run`), runs `gh act -W` against that temp folder, and deletes all
+#   temp files on exit.
 # ==============================================================================
 
 # Exit immediately if any command fails (-e), treat unset variables as errors (-u),
@@ -55,25 +56,54 @@ cp -r .github/workflows/* "$TMP_DIR/"
 find "$TMP_DIR" -type f \( -name '*.yml' -o -name '*.yaml' \) \
   -exec sed -i 's|uses: \$/|uses: ./|g' {} +
 
-# Build a simulated GitHub `push` event payload using your real `HEAD` commit message.
-# Why: `act` does not populate `github.event.head_commit.message` from local Git
-# history automatically, so `validate-push-commit` would fail with an empty header.
-# How: Python reads `git log -1 --pretty=%B` and safely serializes it into valid
-# JSON inside `$TMP_DIR/event.json` (handling quotes and multi-line commit bodies).
+# Detect the requested GitHub event type from the first argument (defaults to `push`).
+# Why: Allows the payload generator below to tailor the mock JSON structure to
+# either a `push` event or a chained `workflow_run` event.
+EVENT_TYPE="${1:-push}"
+
+# Build a simulated GitHub event payload matching the requested event type.
+# Why: `push` workflows need `head_commit.message` for commit validation, while
+# `workflow_run` workflows require `action` and `workflow_run` metadata to pass
+# strict origin and CI success guardrails.
+# How: Python inspects `$EVENT_TYPE`; for `workflow_run` it extracts `owner/repo`
+# from `origin` and builds a completed `CI` run payload, otherwise it reads
+# `git log -1 --pretty=%B` to build a `push` payload.
 python3 -c '
-import json, subprocess, sys
-msg = subprocess.check_output(["git", "log", "-1", "--pretty=%B"], text=True).strip()
-payload = {
-    "head_commit": {"message": msg},
-    "commits": [{"message": msg}]
-}
-with open(sys.argv[1], "w") as f:
+import json, re, subprocess, sys
+
+event_type = sys.argv[1]
+out_path = sys.argv[2]
+
+if event_type == "workflow_run":
+    remote = subprocess.check_output(["git", "remote", "get-url", "origin"], text=True).strip()
+    match = re.search(r"github\.com[:/](.+?)(?:\.git)?$", remote)
+    repo = match.group(1) if match else "owner/repo"
+    branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip()
+    payload = {
+        "action": "completed",
+        "workflow_run": {
+            "name": "CI",
+            "conclusion": "success",
+            "event": "push",
+            "head_branch": branch,
+            "head_repository": {"full_name": repo}
+        },
+        "repository": {"full_name": repo}
+    }
+else:
+    msg = subprocess.check_output(["git", "log", "-1", "--pretty=%B"], text=True).strip()
+    payload = {
+        "head_commit": {"message": msg},
+        "commits": [{"message": msg}]
+    }
+
+with open(out_path, "w") as f:
     json.dump(payload, f)
-' "$TMP_DIR/event.json"
+' "$EVENT_TYPE" "$TMP_DIR/event.json"
 
 # Attach the generated event payload unless the caller explicitly passed `-e` or `--eventpath`.
 # Why: Allows you to override the event file for custom test cases while making
-# default `.github/scripts/run-act.sh` runs validate your actual commit message.
+# default `.github/scripts/run-act.sh` runs work out of the box.
 EVENT_ARGS=()
 if [[ ! " $* " =~ " -e " && ! " $* " =~ " --eventpath " ]]; then
   EVENT_ARGS=(-e "$TMP_DIR/event.json")
@@ -81,6 +111,6 @@ fi
 
 # Execute `gh act` pointing at the rewritten workflows in the temp directory.
 # How: `-W "$TMP_DIR"` tells `act` to load workflows from our temp copy,
-# `"${EVENT_ARGS[@]}"` passes the simulated `push` payload if needed, and `"$@"`
-# forwards every argument you passed to this script (such as `pull_request` or `-j`).
+# `"${EVENT_ARGS[@]}"` passes the simulated payload if needed, and `"$@"`
+# forwards every argument you passed to this script (such as `workflow_run` or `-j`).
 gh act -W "$TMP_DIR" "${EVENT_ARGS[@]}" "$@"

@@ -86,8 +86,9 @@ jobs:
       # -----------------------------------------------------------------------
       # Floating Major Tag Synchronization (e.g., v1 -> v1.0.0)
       # -----------------------------------------------------------------------
-      # Dereferences the annotated release tag (`^{}`) to its underlying commit
-      # and force-updates the major version pointer for downstream action consumers.
+      # Explicitly fetches the release tag into `refs/tags/` so Git can resolve
+      # it locally, dereferences the annotated tag (`^{}`) to its underlying
+      # commit, and force-updates the major version ref for downstream consumers.
       - name: Update floating major tag
         if: ${{ steps.release.outputs.release_created == 'true' }}
         env:
@@ -96,10 +97,10 @@ jobs:
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin "$TAG_NAME"
-          git tag -f "$MAJOR_TAG" "$TAG_NAME^{}"
-          git push origin "$MAJOR_TAG" --force
+          git config user.email "41898282+github-actions[bot]@://github.com"
+          git fetch origin "refs/tags/${TAG_NAME}:refs/tags/${TAG_NAME}"
+          git tag -f "$MAJOR_TAG" "${TAG_NAME}^{}"
+          git push origin "refs/tags/${MAJOR_TAG}" --force
 
       # -----------------------------------------------------------------------
       # Output Logging and Reporting
