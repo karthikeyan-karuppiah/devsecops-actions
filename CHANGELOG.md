@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.0](https://github.com/karthikeyan-karuppiah/devsecops-actions/compare/v1.1.0...v1.2.0) (2026-11-16)
+
+
+### Features
+
+* add integration test fixtures, harden actions, and complete documentation ([95378f7](https://github.com/karthikeyan-karuppiah/devsecops-actions/commit/95378f711984e6ee00e1bf769b74392c5c5eb6ef))
+
+
+### Bug Fixes
+
+* **ci:** fix mangled actionlint module path in go install ([e906a89](https://github.com/karthikeyan-karuppiah/devsecops-actions/commit/e906a89efd305292997ca2362eda966a2ddfcb77))
+
 ## [1.1.0](https://github.com/karthikeyan-karuppiah/devsecops-actions/compare/v1.0.0...v1.1.0) (2026-11-16)
 
 
