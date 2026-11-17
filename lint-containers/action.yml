@@ -67,6 +67,22 @@ runs:
     # -------------------------------------------------------------------------
     # Stage 1: YAML Syntax & Formatting Analysis
     # -------------------------------------------------------------------------
+    # Ensures `yamllint` is present on the runner before invoking the wrapper
+    # action (required for lightweight local `act` runner containers where
+    # Docker-in-Docker action wrappers execute directly on the job host).
+    - name: Ensure yamllint is installed
+      if: inputs.run-yamllint == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! command -v yamllint >/dev/null 2>&1; then
+          if command -v sudo >/dev/null 2>&1; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq yamllint
+          else
+            apt-get update -qq && apt-get install -y -qq yamllint
+          fi
+        fi
+
     - name: Lint YAML files (built-in defaults)
       if: inputs.run-yamllint == 'true' && inputs.yamllint-config-file == ''
       uses: ibiqlik/action-yamllint@v3.1.1

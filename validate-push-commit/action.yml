@@ -113,9 +113,9 @@ runs:
         }
 
         # Validate all commits in the push payload (if enabled and present), else head_commit
+        # Uses jq's `split("\n")[0]` so multi-line commit bodies emit only one header line per commit.
         if [ "$CHECK_ALL" = "true" ] && [ -n "$COMMITS_JSON" ] && [ "$COMMITS_JSON" != "null" ] && [ "$COMMITS_JSON" != "[]" ]; then
-          while IFS= read -r msg; do
-            header=$(printf '%s\n' "$msg" | head -n 1)
+          while IFS= read -r header; do
             set +e
             validate_header "$header"
             rc=$?
@@ -123,7 +123,7 @@ runs:
             if [ "$rc" -eq 1 ]; then
               exit 1
             fi
-          done < <(printf '%s' "$COMMITS_JSON" | jq -r '.[].message')
+          done < <(printf '%s' "$COMMITS_JSON" | jq -r '.[].message | split("\n")[0]')
         fi
 
         # Parse head_commit metadata for step outputs
