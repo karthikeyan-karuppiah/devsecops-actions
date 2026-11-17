@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/karthikeyan-karuppiah/devsecops-actions/compare/v1.2.0...v1.2.1) (2026-11-17)
+
+
+### Bug Fixes
+
+* **ci:** resolve release tag refspec and support local workflow_run testing ([42786ef](https://github.com/karthikeyan-karuppiah/devsecops-actions/commit/42786efdfe499118bf5d833fe9e73fd970c3517b))
+
 ## [1.2.0](https://github.com/karthikeyan-karuppiah/devsecops-actions/compare/v1.1.0...v1.2.0) (2026-11-16)
 
 
