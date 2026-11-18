@@ -79,7 +79,7 @@ jobs:
       # have a local working tree and authenticated push permissions.
       - name: Checkout repository
         if: ${{ steps.release.outputs.release_created == 'true' }}
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7.0.1
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
 
