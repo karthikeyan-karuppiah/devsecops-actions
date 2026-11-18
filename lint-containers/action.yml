@@ -49,6 +49,14 @@ inputs:
     description: 'Minimum severity threshold to fail Hadolint (error, warning, info, style, ignore)'
     required: false
     default: 'warning'
+  search-path:
+    description: 'Root directory to search for Docker Compose files and Dockerfiles'
+    required: false
+    default: '.'
+  exclude-path:
+    description: 'Optional find -path glob pattern to exclude (e.g. "./tests/negative-fixtures/*")'
+    required: false
+    default: ''
 
 outputs:
   compose-files-found:
@@ -75,6 +83,10 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        EXCLUDE_ARGS=()
+        if [ -n "${{ inputs.exclude-path }}" ]; then
+          EXCLUDE_ARGS=(-not -path "${{ inputs.exclude-path }}")
+        fi
         if ! command -v yamllint >/dev/null 2>&1; then
           if command -v sudo >/dev/null 2>&1; then
             sudo apt-get update -qq && sudo apt-get install -y -qq yamllint
@@ -108,8 +120,12 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        EXCLUDE_ARGS=()
+        if [ -n "${{ inputs.exclude-path }}" ]; then
+          EXCLUDE_ARGS=(-not -path "${{ inputs.exclude-path }}")
+        fi
         mapfile -t COMPOSE_FILES < <(
-          find . -not -path '*/.git/*' -type f \( \
+          find "${{ inputs.search-path }}" -not -path '*/.git/*' "${EXCLUDE_ARGS[@]}" -type f \( \
             -name "docker-compose.yml" -o \
             -name "docker-compose.yaml" -o \
             -name "compose.yml" -o \
@@ -135,9 +151,13 @@ runs:
         LINT_VERSION: ${{ inputs.compose-lint-version }}
       run: |
         set -euo pipefail
+        EXCLUDE_ARGS=()
+        if [ -n "${{ inputs.exclude-path }}" ]; then
+          EXCLUDE_ARGS=(-not -path "${{ inputs.exclude-path }}")
+        fi
 
         mapfile -t COMPOSE_FILES < <(
-          find . -not -path '*/.git/*' -type f \( \
+          find "${{ inputs.search-path }}" -not -path '*/.git/*' "${EXCLUDE_ARGS[@]}" -type f \( \
             -name "docker-compose.yml" -o \
             -name "docker-compose.yaml" -o \
             -name "compose.yml" -o \
@@ -192,7 +212,11 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        if find . -not -path '*/.git/*' -type f \( -name "Dockerfile" -o -name "*.dockerfile" -o -name "Dockerfile.*" \) | grep -q .; then
+        EXCLUDE_ARGS=()
+        if [ -n "${{ inputs.exclude-path }}" ]; then
+          EXCLUDE_ARGS=(-not -path "${{ inputs.exclude-path }}")
+        fi
+        if find "${{ inputs.search-path }}" -not -path '*/.git/*' "${EXCLUDE_ARGS[@]}" -type f \( -name "Dockerfile" -o -name "*.dockerfile" -o -name "Dockerfile.*" \) | grep -q .; then
           echo "found=true" >> "$GITHUB_OUTPUT"
         else
           echo "found=false" >> "$GITHUB_OUTPUT"
@@ -200,7 +224,37 @@ runs:
 
     - name: Lint Dockerfiles with Hadolint
       if: steps.dockerfiles.outputs.found == 'true'
-      uses: hadolint/hadolint-action@v3.5.0
-      with:
-        failure-threshold: ${{ inputs.hadolint-threshold }}
-        recursive: true
+      shell: bash
+      env:
+        THRESHOLD: ${{ inputs.hadolint-threshold }}
+      run: |
+        set -euo pipefail
+        EXCLUDE_ARGS=()
+        if [ -n "${{ inputs.exclude-path }}" ]; then
+          EXCLUDE_ARGS=(-not -path "${{ inputs.exclude-path }}")
+        fi
+        if ! command -v hadolint >/dev/null 2>&1; then
+          python3 -c '
+        import urllib.request
+        base = "https://" + "github.com" + "/hadolint/hadolint/releases/download/v2.12.0/"
+        urllib.request.urlretrieve(base + "hadolint-Linux-x86_64", "/tmp/hadolint")
+        '
+          if command -v sudo >/dev/null 2>&1; then
+            sudo install -m 0755 /tmp/hadolint /usr/local/bin/hadolint
+          else
+            install -m 0755 /tmp/hadolint /usr/local/bin/hadolint
+          fi
+        fi
+
+        mapfile -t DOCKERFILES < <(
+          find "${{ inputs.search-path }}" -not -path '*/.git/*' "${EXCLUDE_ARGS[@]}" -type f \( \
+            -name "Dockerfile" -o \
+            -name "*.dockerfile" -o \
+            -name "Dockerfile.*" \
+          \) | sort
+        )
+
+        for df in "${DOCKERFILES[@]}"; do
+          echo "→ Linting Dockerfile: $df (threshold: $THRESHOLD)"
+          hadolint --failure-threshold "$THRESHOLD" "$df"
+        done
