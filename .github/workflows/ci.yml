@@ -2,14 +2,20 @@
 # Pipeline 1: Continuous Integration / Action Validation & Integration Tests
 # =============================================================================
 # Core Architecture & Security Model:
-#   1. Zero-Trust Permissions: Top-level permissions locked down; least-privilege
-#      `contents: read` granted strictly at the job level.
-#   2. Credential Hygiene: Disables persisted Git credentials on checkout to
+#   1. Atomic Release Gate: Runs all 4 validation jobs in parallel under `CI`
+#      so `release.yml` (`workflows: ["CI"]`) only triggers when every check
+#      passes.
+#   2. Zero-Trust Permissions: Top-level permissions locked down; least-privilege
+#      `contents: read` granted strictly at each job level.
+#   3. Credential Hygiene: Disables persisted Git credentials on checkout to
 #      prevent unintended token leakage across composite action steps.
-#   3. Lockfile & Static Validation: Enforces `actions.lock` pins and lints
-#      workflows via actionlint before executing local `$/` composite actions.
-#   4. End-to-End Integration Testing: Executes every composite action against
-#      hardened fixtures in `tests/fixtures/` and asserts expected outputs.
+#   4. Concurrency Control: Cancels superseded Pull Request runs immediately to
+#      save runner minutes while guaranteeing `main` branch runs never cancel.
+#   5. Four-Stage Parallel Verification:
+#      - Job 1 (`verify-lockfile`): Enforces `actions.lock` supply-chain pins.
+#      - Job 2 (`static-lint`): Lints shell scripts (ShellCheck) & YAML (actionlint).
+#      - Job 3 (`test-actions`): Positive end-to-end composite action tests.
+#      - Job 4 (`test-negative-fixtures`): Fail-closed security gate tests.
 # =============================================================================
 
 name: CI
@@ -24,13 +30,128 @@ on:
     branches: [main]
 
 # -----------------------------------------------------------------------------
+# Concurrency Management (Cancels Superseded PR Runs; Protects `main` Runs)
+# -----------------------------------------------------------------------------
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# -----------------------------------------------------------------------------
 # Zero-Trust Global Permissions Matrix
 # -----------------------------------------------------------------------------
 permissions: {}
 
 jobs:
+# =============================================================================
+# Parallel Job Execution Matrix
+# =============================================================================
+# GitHub Actions executes all top-level jobs in parallel by default because
+# none of the jobs below declare a `needs:` dependency:
+#   - `verify-lockfile`        (Supply-chain pin verification via gh-actions-lock)
+#   - `static-lint`            (ShellCheck & actionlint static analysis)
+#   - `test-actions`           (Positive composite action integration tests)
+#   - `test-negative-fixtures` (Fail-closed security gate assertions)
+#
+# All 4 runners start simultaneously at t=0s for fastest feedback, and `CI`
+# reports `success` to `release.yml` only after every parallel job passes.
+# =============================================================================
   # ===========================================================================
-  # Job: Lint Workflows and Execute Local Composite Action Integration Tests
+  # Job 1: Supply-Chain Lockfile Verification (`gh-actions-lock`)
+  # ===========================================================================
+  verify-lockfile:
+    name: Verify Actions Lockfile
+    runs-on: ubuntu-latest
+    # Fast fail-safe timeout for lockfile verification
+    timeout-minutes: 5
+
+    # Read-only repository access is all that is needed to verify actions.lock
+    permissions:
+      contents: read
+
+    # Provide read-only workflow token so `gh` CLI can query GitHub APIs
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      # -----------------------------------------------------------------------
+      # Workspace Checkout
+      # -----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4.4.0
+        with:
+          persist-credentials: false
+
+      # -----------------------------------------------------------------------
+      # Install Pinned Lockfile Verifier
+      # -----------------------------------------------------------------------
+      # Installs exact version v0.4.1 of `gh-actions-lock` to prevent supply-chain
+      # drift in the verification tool itself.
+      - name: Install gh-actions-lock
+        run: gh extension install github/gh-actions-lock --pin v0.4.1
+
+      # -----------------------------------------------------------------------
+      # Verify Lockfile Consistency
+      # -----------------------------------------------------------------------
+      # Fails the build if any workflow or composite action uses unpinned refs
+      # or diverges from the hashes recorded in `actions.lock`.
+      - name: Verify workflow lockfile
+        run: gh actions-lock --verify
+
+  # ===========================================================================
+  # Job 2: Static Shell Script & Workflow YAML Linting
+  # ===========================================================================
+  static-lint:
+    name: Lint Workflows & Shell Scripts
+    runs-on: ubuntu-latest
+    # Fast fail-safe timeout for static analysis tools
+    timeout-minutes: 5
+
+    # Least-privilege repository read access required for checkout
+    permissions:
+      contents: read
+
+    steps:
+      # -----------------------------------------------------------------------
+      # Workspace Checkout
+      # -----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4.4.0
+        with:
+          persist-credentials: false
+
+      # -----------------------------------------------------------------------
+      # Static Shell Script Analysis (ShellCheck)
+      # -----------------------------------------------------------------------
+      # Lints all repository shell scripts (e.g., `.github/scripts/run-act.sh`)
+      # for quoting bugs, unset variables, and command-injection hazards.
+      - name: Lint shell scripts with ShellCheck
+        run: |
+          set -euo pipefail
+          find . -type f -name '*.sh' -exec shellcheck {} +
+          echo "✅ Verified all shell scripts passed ShellCheck"
+
+      # -----------------------------------------------------------------------
+      # Static Workflow & Action Syntax Validation (actionlint + ShellCheck)
+      # -----------------------------------------------------------------------
+      # Downloads the precompiled actionlint v1.7.12 release binary (with SHA-256
+      # checksum verification) and runs it with `-ignore` for `$/` paths.
+      # Automatically invokes ShellCheck on inline `run:` blocks in YAML files.
+      - name: Lint workflow and action YAML files
+        run: |
+          set -euo pipefail
+          VERSION="1.7.12"
+          TARBALL="actionlint_${VERSION}_linux_amd64.tar.gz"
+          BASE_URL="https://github.com{VERSION}"
+
+          curl -sSLf "${BASE_URL}/${TARBALL}" -o "/tmp/${TARBALL}"
+          curl -sSLf "${BASE_URL}/actionlint_${VERSION}_checksums.txt" -o /tmp/checksums.txt
+
+          (cd /tmp && grep "${TARBALL}" checksums.txt | sha256sum -c -)
+          tar -xzf "/tmp/${TARBALL}" -C /tmp actionlint
+          /tmp/actionlint -ignore 'specifying action "[$]/'
+
+  # ===========================================================================
+  # Job 3: Positive Composite Action Integration Tests (Happy Path)
   # ===========================================================================
   test-actions:
     name: Test Composite Actions
@@ -52,25 +173,6 @@ jobs:
         uses: actions/checkout@v4.4.0
         with:
           persist-credentials: false
-
-      # -----------------------------------------------------------------------
-      # Static Workflow & Action Syntax Validation
-      # -----------------------------------------------------------------------
-      # Downloads the precompiled actionlint v1.7.12 release binary (with SHA-256
-      # checksum verification) and runs it with `-ignore` for `$/` paths.
-      - name: Lint workflow and action YAML files
-        run: |
-          set -euo pipefail
-          VERSION="1.7.12"
-          TARBALL="actionlint_${VERSION}_linux_amd64.tar.gz"
-          BASE_URL="https://github.com/rhysd/actionlint/releases/download/v${VERSION}"
-
-          curl -sSLf "${BASE_URL}/${TARBALL}" -o "/tmp/${TARBALL}"
-          curl -sSLf "${BASE_URL}/actionlint_${VERSION}_checksums.txt" -o /tmp/checksums.txt
-
-          (cd /tmp && grep "${TARBALL}" checksums.txt | sha256sum -c -)
-          tar -xzf "/tmp/${TARBALL}" -C /tmp actionlint
-          /tmp/actionlint -ignore 'specifying action "[$]/'
 
       # -----------------------------------------------------------------------
       # Integration Test 1: Conventional Commit Gate
@@ -122,3 +224,70 @@ jobs:
           test -f "/tmp/test-sboms/alpine_3.21.3.cdx.json"
           test -f "/tmp/trivy-test.sarif"
           echo "✅ Verified CycloneDX SBOM and SARIF outputs exist"
+
+  # ===========================================================================
+  # Job 4: Negative Fixture Validation (Verifies Security Gates Reject Bad Inputs)
+  # ===========================================================================
+  test-negative-fixtures:
+    name: Test Expected Security Gate Failures
+    runs-on: ubuntu-latest
+    # Fail-safe timeout to prevent hung container builds or security scans
+    timeout-minutes: 10
+
+    # Least-privilege repository read access required for checkout and local actions
+    permissions:
+      contents: read
+
+    steps:
+      # -----------------------------------------------------------------------
+      # Workspace Checkout
+      # -----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4.4.0
+        with:
+          persist-credentials: false
+
+      # -----------------------------------------------------------------------
+      # Negative Test 1: Container Linter Fail-Closed Verification
+      # -----------------------------------------------------------------------
+      # Executes lint-containers against a deliberately non-compliant Dockerfile
+      # (`tests/negative-fixtures/Dockerfile.bad`) and asserts a failure outcome.
+      - name: Run lint-containers against broken Dockerfile
+        id: neg-lint
+        continue-on-error: true
+        uses: $/lint-containers
+        with:
+          dockerfile-path: 'tests/negative-fixtures/Dockerfile.bad'
+          hadolint-threshold: 'warning'
+
+      - name: Assert lint-containers failed as expected
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.neg-lint.outcome }}" != "failure" ]; then
+            echo "❌ Expected lint-containers to fail on Dockerfile.bad, but outcome was '${{ steps.neg-lint.outcome }}'"
+            exit 1
+          fi
+          echo "✅ Verified lint-containers rejected non-compliant Dockerfile"
+
+      # -----------------------------------------------------------------------
+      # Negative Test 2: Trivy Security Gate Fail-Closed Verification
+      # -----------------------------------------------------------------------
+      # Executes trivy-security against known vulnerable dependencies in
+      # `tests/negative-fixtures/` and asserts that enforcement blocks the step.
+      - name: Run trivy-security against vulnerable fixture
+        id: neg-trivy
+        continue-on-error: true
+        uses: $/trivy-security
+        with:
+          scan-path: 'tests/negative-fixtures'
+          severity: 'CRITICAL,HIGH'
+          enforce-fs-findings: 'true'
+
+      - name: Assert trivy-security failed as expected
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.neg-trivy.outcome }}" != "failure" ]; then
+            echo "❌ Expected trivy-security to fail on vulnerable fixture, but outcome was '${{ steps.neg-trivy.outcome }}'"
+            exit 1
+          fi
+          echo "✅ Verified trivy-security blocked vulnerable fixture"

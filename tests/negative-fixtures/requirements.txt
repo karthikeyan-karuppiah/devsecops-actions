@@ -1,0 +1,4 @@
+# Deliberately vulnerable dependency for negative Trivy CI testing.
+# A plain Python requirements.txt is the cleanest way to trigger Trivy's filesystem vulnerability scanner
+# —it takes only 2 lines, has zero lockfile bloat, and pins an ancient version of requests with well-known CRITICAL/HIGH CVEs (e.g., CVE-2018-18074, CVE-2023-32681):
+requests==2.19.1

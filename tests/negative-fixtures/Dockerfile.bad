@@ -1,0 +1,5 @@
+# Deliberately non-compliant Dockerfile for negative CI testing.
+# Triggers Hadolint DL3006 (untagged image) and DL3008 (unpinned apt package).
+FROM ubuntu
+
+RUN apt-get update && apt-get install -y curl
